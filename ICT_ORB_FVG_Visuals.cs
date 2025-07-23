@@ -25,6 +25,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 		private double entryPrice;
 		private double initialRisk;
 		private double currentTP;
+		private string activeOrderTag = string.Empty;
 
         #region Variables
         private double riskPercent = 1; // default to 1%
@@ -214,10 +215,12 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
             entryPrice = Close[0];
             initialRisk = Math.Abs(entryPrice - Open[2]);
             currentTP = entryPrice + 2 * initialRisk;
+			
+			activeOrderTag = "ORB_Long" + timestamp;
 
-            EnterLong("ORB_Long" + timestamp);
-            SetStopLoss("ORB_Long" + timestamp, CalculationMode.Price, Open[2], false);
-            SetProfitTarget("ORB_Long" + timestamp, CalculationMode.Price, currentTP);
+            EnterLong(activeOrderTag);
+            SetStopLoss(activeOrderTag, CalculationMode.Price, Open[2], false);
+            SetProfitTarget(activeOrderTag, CalculationMode.Price, currentTP);
 
             trailingStopPrice = openingClose;
             tradePlaced = true;
@@ -234,10 +237,11 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
             entryPrice = Close[0];
             initialRisk = Math.Abs(entryPrice - Open[2]);
             currentTP = entryPrice - 2 * initialRisk;
+			activeOrderTag = "ORB_Short" + timestamp;
 
-            EnterShort("ORB_Short" + timestamp);
-            SetStopLoss("ORB_Short" + timestamp, CalculationMode.Price, Open[2], false);
-            SetProfitTarget("ORB_Short" + timestamp, CalculationMode.Price, currentTP);
+            EnterShort(activeOrderTag);
+            SetStopLoss(activeOrderTag, CalculationMode.Price, Open[2], false);
+            SetProfitTarget(activeOrderTag, CalculationMode.Price, currentTP);
 
             trailingStopPrice = openingClose;
             tradePlaced = true;
@@ -257,7 +261,8 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 if (!double.IsNaN(swingLow) && swingLow > trailingStopPrice)
                 {
                     trailingStopPrice = swingLow;
-                    ExitLongStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", "ORB_Long" + timestamp);
+                    //ExitLongStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", activeOrderTag);
+					SetStopLoss(activeOrderTag, CalculationMode.Price, trailingStopPrice, false);
                     Draw.Line(this, "TS_Long_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice, Brushes.DarkRed, DashStyleHelper.Dash, 2);
                 }
             }
@@ -267,7 +272,8 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 if (!double.IsNaN(swingHigh) && swingHigh < trailingStopPrice)
                 {
                     trailingStopPrice = swingHigh;
-                    ExitShortStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", "ORB_Short" + timestamp);
+                    //ExitShortStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", activeOrderTag);
+					SetStopLoss(activeOrderTag, CalculationMode.Price, trailingStopPrice, false);
                     Draw.Line(this, "TS_Short_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice, Brushes.DarkGreen, DashStyleHelper.Dash, 2);
                 }
             }
@@ -280,7 +286,7 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 if (currentTP - trailingStopPrice < TPAdjustThreshold  * initialRisk)
                 {
                     currentTP += initialRisk;
-                    SetProfitTarget("ORB_Long" + timestamp, CalculationMode.Price, currentTP);
+                    SetProfitTarget(activeOrderTag, CalculationMode.Price, currentTP);
                     Draw.Line(this, "ExtendedTP_Long_" + CurrentBar, false, 0, currentTP, 5, currentTP, Brushes.Gold, DashStyleHelper.Dash, 2);
                     Print($"[TP Extended - Long] New TP = {currentTP}, trailingStop = {trailingStopPrice}");
                 }
@@ -290,7 +296,7 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 if (trailingStopPrice - currentTP < TPAdjustThreshold  * initialRisk)
                 {
                     currentTP -= initialRisk;
-                    SetProfitTarget("ORB_Short" + timestamp, CalculationMode.Price, currentTP);
+                    SetProfitTarget(activeOrderTag, CalculationMode.Price, currentTP);
                     Draw.Line(this, "ExtendedTP_Short_" + CurrentBar, false, 0, currentTP, 5, currentTP, Brushes.Gold, DashStyleHelper.Dash, 2);
                     Print($"[TP Extended - Short] New TP = {currentTP}, trailingStop = {trailingStopPrice}");
                 }
