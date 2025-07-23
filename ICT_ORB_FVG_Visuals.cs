@@ -1,3 +1,4 @@
+
 using System;
 using NinjaTrader.Cbi;
 using NinjaTrader.Data;
@@ -6,6 +7,8 @@ using NinjaTrader.NinjaScript.DrawingTools;  // <--- Required for Draw methods
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.Strategies;
 using NinjaTrader.Gui;
+using System.ComponentModel.DataAnnotations;
+
 
 
 namespace NinjaTrader.NinjaScript.Strategies
@@ -25,6 +28,19 @@ namespace NinjaTrader.NinjaScript.Strategies
 		private double entryPrice;
 		private double initialRisk;
 		private double currentTP;
+		
+		#region Variables
+private double riskPercent = 1; // default to 1%
+#endregion
+
+[NinjaScriptProperty]
+[Range(0.1, 100)]
+[Display(Name = "Risk % of Account", Description = "Risk percentage of account per trade", GroupName = "Risk Settings", Order = 1)]
+public double RiskPercent
+{
+    get { return riskPercent; }
+    set { riskPercent = value; }
+}
 
 
 
@@ -108,8 +124,6 @@ namespace NinjaTrader.NinjaScript.Strategies
                 if (currentLocalTime < OREndLocal)
                     return;
 
-                //bool bullishFVG = (Low[0] > High[2]) || (Low[1] > High[3]);
-                //bool bearishFVG = (High[0] < Low[2]) || (High[1] < Low[3]);
 				
 				bool bullishFVG = High[2] < Low[0] && Close[2] > Open[2];
 				bool bearishFVG = Low[2] > High[0] && Close[2] < Open[2];
@@ -139,10 +153,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                     return;
 				
 // === Risk Calculation (in dollar terms) ===
-double tickSize = TickSize;          // 0.25 for NQ
-double tickValue = 5.0;              // $5 per tick for NQ
-double accountBalance = 50000.0;     // Or use live value
-double maxAllowedRisk = 0.01 * accountBalance; // 1% of 50k = $500
+double tickSize = TickSize;          
+double tickValue = Instrument.MasterInstrument.TickSize * Instrument.MasterInstrument.PointValue;
+double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+double maxAllowedRisk = RiskPercent  * accountBalance; 
 
 // Calculate stop distance in points
 double stopDistancePoints = Math.Abs(Close[0] - Open[3]);
