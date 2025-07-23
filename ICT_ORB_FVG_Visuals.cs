@@ -1,4 +1,3 @@
-
 using System;
 using NinjaTrader.Cbi;
 using NinjaTrader.Data;
@@ -8,8 +7,6 @@ using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.Strategies;
 using NinjaTrader.Gui;
 using System.ComponentModel.DataAnnotations;
-
-
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
@@ -28,20 +25,19 @@ namespace NinjaTrader.NinjaScript.Strategies
 		private double entryPrice;
 		private double initialRisk;
 		private double currentTP;
-		
-		#region Variables
-private double riskPercent = 1; // default to 1%
-#endregion
 
-[NinjaScriptProperty]
-[Range(0.1, 100)]
-[Display(Name = "Risk % of Account", Description = "Risk percentage of account per trade", GroupName = "Risk Settings", Order = 1)]
-public double RiskPercent
-{
-    get { return riskPercent; }
-    set { riskPercent = value; }
-}
+        #region Variables
+        private double riskPercent = 1; // default to 1%
+        #endregion
 
+        [NinjaScriptProperty]
+        [Range(0.1, 100)]
+        [Display(Name = "Risk % of Account", Description = "Risk percentage of account per trade", GroupName = "Risk Settings", Order = 1)]
+        public double RiskPercent
+        {
+            get { return riskPercent; }
+            set { riskPercent = value; }
+        }
 
 
 
@@ -73,6 +69,8 @@ public double RiskPercent
     		return TimeZoneInfo.ConvertTimeFromUtc(localTime.ToUniversalTime(), nyTimeZone);
 		}
 
+
+
         protected override void OnBarUpdate()
         {
             if (CurrentBars[0] < 5 || CurrentBars[1] < 1)
@@ -80,15 +78,14 @@ public double RiskPercent
 
             DateTime currentBarTime = Times[0][0];
             TimeSpan currentLocalTime = currentBarTime.TimeOfDay;
-			string timestamp = currentBarTime.ToString("yyyyMMddHHmmss");
-
+            string timestamp = currentBarTime.ToString("yyyyMMddHHmmss");
 
             DateTime nyTime = ConvertToNewYorkTime(currentBarTime);
-			TimeSpan nyLocalTime = nyTime.TimeOfDay;
+            TimeSpan nyLocalTime = nyTime.TimeOfDay;
+            DateTime nySessionDate = nyTime.Date;
 
-			DateTime nySessionDate = nyTime.Date;
-			if (nyLocalTime < ORStartLocal)
-    			nySessionDate = nySessionDate.AddDays(-1);
+            if (nyLocalTime < ORStartLocal)
+                nySessionDate = nySessionDate.AddDays(-1);
 
             if (sessionDate != nySessionDate)
             {
@@ -97,198 +94,183 @@ public double RiskPercent
                 trailingStopPrice = double.NaN;
                 sessionDate = nySessionDate;
             }
-			
-			//Print($"[DEBUG] BarTime={currentBarTime} | TimeOfDay={currentLocalTime} | ORCaptured={openingCaptured} | TradePlaced={tradePlaced} nySessionDate={nySessionDate} sessionDate={sessionDate} nyTime={nyTime}");
-
 
             if (BarsInProgress == 1 && !openingCaptured)
-            {
-                DateTime barTime5Min = Times[1][0];
-                TimeSpan barLocalTime5Min = barTime5Min.TimeOfDay;
-
-                //if (barLocalTime5Min >= ORStartLocal && barLocalTime5Min < OREndLocal)
-				 if (barLocalTime5Min == OREndLocal)
-                {
-                    openingHigh = Highs[1][0];
-                    openingLow = Lows[1][0];
-                    openingClose = Closes[1][0];
-                    openingCaptured = true;
-
-                    string tag = "ORBox" + sessionDate.ToString("yyyyMMdd");
-                    Draw.Rectangle(this, tag, false, 5, openingHigh, 0, openingLow, Brushes.LightBlue, Brushes.Blue, 20);
-                }
-            }
+                CaptureOpeningRange();
 
             if (BarsInProgress == 0 && openingCaptured && !tradePlaced)
             {
                 if (currentLocalTime < OREndLocal)
                     return;
 
-				
-				bool bullishFVG = High[2] < Low[0] && Close[2] > Open[2];
-				bool bearishFVG = Low[2] > High[0] && Close[2] < Open[2];
-				
-				// === FVG Visuals ===
+                bool bullishFVG = High[2] < Low[0] && Close[2] > Open[2];
+                bool bearishFVG = Low[2] > High[0] && Close[2] < Open[2];
 
-    if (bullishFVG)
-    {
-        string tag = "BullFVG_" + Time[0].ToString("yyyyMMddHHmmss");
-        Draw.Rectangle(this, tag, false,
-            2, Low[0], 0, High[2],
-            Brushes.LightGreen, Brushes.Green, 20);
-    }
+                DrawFVGZones(bullishFVG, bearishFVG);
 
-    if (bearishFVG)
-    {
-        string tag = "BearFVG_" + Time[0].ToString("yyyyMMddHHmmss");
-        Draw.Rectangle(this, tag, false,
-            2, High[0], 0, Low[2],
-            Brushes.Pink, Brushes.Red, 20);
-    }
-
-
-
-                double risk = Math.Abs(Close[0] - Open[3]);
-                if (risk < TickSize)
+                double stopDistancePoints = Math.Abs(Close[0] - Open[3]);
+                if (stopDistancePoints < TickSize)
                     return;
-				
-// === Risk Calculation (in dollar terms) ===
-double tickSize = TickSize;          
-double tickValue = Instrument.MasterInstrument.TickSize * Instrument.MasterInstrument.PointValue;
-double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
-double maxAllowedRisk = RiskPercent  * accountBalance; 
 
-// Calculate stop distance in points
-double stopDistancePoints = Math.Abs(Close[0] - Open[3]);
+                double dollarRisk = CalculateDollarRisk(stopDistancePoints);
+                double maxRisk = GetMaxAllowedRisk();
 
-// Convert to dollar risk
-double stopDistanceTicks = stopDistancePoints / tickSize;
-double dollarRiskPerContract = stopDistanceTicks * tickValue;
+                if (dollarRisk > maxRisk)
+                {
+                    Print($"[RISK BLOCKED] Risk ${dollarRisk:F2} > Max Allowed ${maxRisk:F2}");
+                    return;
+                }
 
-
-
-                double reward = 2 * risk;
-				int endBarIndex = Bars.GetBar(Time[0].AddMinutes(10));
-
+                double reward = 2 * stopDistancePoints;
 
                 if (Close[0] > openingHigh && bullishFVG)
-                {
-if (dollarRiskPerContract > maxAllowedRisk)
-{
-    Print($"[RISK BLOCKED] Risk ${dollarRiskPerContract:F2} > Max Allowed ${maxAllowedRisk:F2}");
-    return;
-}
-                   entryPrice = Close[0];
-initialRisk = Math.Abs(entryPrice - Open[2]);
-currentTP = entryPrice + 2 * initialRisk;
-
-EnterLong("ORB_Long" + timestamp);
-SetStopLoss("ORB_Long" + timestamp, CalculationMode.Price, Open[2], false);
-SetProfitTarget("ORB_Long" + timestamp, CalculationMode.Price, currentTP);
-
-                    trailingStopPrice = openingClose;
-                    tradePlaced = true;
-					   entryBar = CurrentBar;  // store the bar index of entry
-
-
-                    Draw.ArrowUp(this, "LongEntry" + CurrentBar, false, 0, Low[0] - 2 * TickSize, Brushes.Green);
-
-					
-					    // Draw limited length lines for SL and TP for now with 10 bars length (for example)
-					Draw.Line(this, "Entry_Line"+timestamp, false,  0,Close[0], 5, Close[0], Brushes.Blue, DashStyleHelper.Dash, 2);
-    				Draw.Line(this, "SL_Long_Line"+timestamp, false,  0,Open[2], 5, Open[2], Brushes.Red, DashStyleHelper.Dash, 2);
-    				Draw.Line(this, "TP_Long_Line"+timestamp, false, 0,Close[0] + reward, 5, currentTP, Brushes.LimeGreen, DashStyleHelper.Dash, 2);
-
-                }
+                    PlaceLongTrade(timestamp, reward);
                 else if (Close[0] < openingLow && bearishFVG)
-                {
-if (dollarRiskPerContract > maxAllowedRisk)
-{
-    Print($"[RISK BLOCKED] Risk ${dollarRiskPerContract:F2} > Max Allowed ${maxAllowedRisk:F2}");
-    return;
-}
-                    entryPrice = Close[0];
-initialRisk = Math.Abs(entryPrice - Open[2]);
-currentTP = entryPrice - 2 * initialRisk;
-
-EnterShort("ORB_Short" + timestamp);
-SetStopLoss("ORB_Short" + timestamp, CalculationMode.Price, Open[2], false);
-SetProfitTarget("ORB_Short" + timestamp, CalculationMode.Price, currentTP);
-					
-                    trailingStopPrice = openingClose;
-                    tradePlaced = true;
-					 entryBar = CurrentBar; // store entry bar
-
-
-                    Draw.ArrowDown(this, "ShortEntry" + CurrentBar, false, 0, High[0] + 2 * TickSize, Brushes.Red);
-					Draw.Line(this, "Entry_Line"+timestamp, false,  0,Close[0], 5, Close[0], Brushes.Blue, DashStyleHelper.Dash, 2);
-					Draw.Line(this, "SL_Short_Line"+timestamp, false, 0, Open[2], 5, Open[2], Brushes.Green, DashStyleHelper.Dash, 2);
-    				Draw.Line(this, "TP_Short_Line"+timestamp, false, 0, Close[0] - reward, 5, currentTP, Brushes.Orange, DashStyleHelper.Dash, 2);
-              }
+                    PlaceShortTrade(timestamp, reward);
             }
 
-          if (tradePlaced && Position.MarketPosition != MarketPosition.Flat)
-{
-    if (Position.MarketPosition == MarketPosition.Long)
-    {
-        double swingLow = GetSwingLow(swingStrength);
-        if (!double.IsNaN(swingLow) && swingLow > trailingStopPrice)
-        {
-            trailingStopPrice = swingLow;
-
-            ExitLongStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", "ORB_Long" + timestamp);
-
-            Draw.Line(this, "TS_Long_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice,
-                Brushes.DarkRed, DashStyleHelper.Dash, 2);
+            if (tradePlaced && Position.MarketPosition != MarketPosition.Flat)
+            {
+                ManageTrailingStop(timestamp);
+                ExtendProfitTargetIfNeeded(timestamp);
+            }
         }
-    }
-    else if (Position.MarketPosition == MarketPosition.Short)
-    {
-        double swingHigh = GetSwingHigh(swingStrength);
-        if (!double.IsNaN(swingHigh) && swingHigh < trailingStopPrice)
+
+        private void CaptureOpeningRange()
         {
-            trailingStopPrice = swingHigh;
+            DateTime barTime5Min = Times[1][0];
+            TimeSpan barLocalTime5Min = barTime5Min.TimeOfDay;
 
-            ExitShortStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", "ORB_Short" + timestamp);
+            if (barLocalTime5Min == OREndLocal)
+            {
+                openingHigh = Highs[1][0];
+                openingLow = Lows[1][0];
+                openingClose = Closes[1][0];
+                openingCaptured = true;
 
-            Draw.Line(this, "TS_Short_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice,
-                Brushes.DarkGreen, DashStyleHelper.Dash, 2);
+                string tag = "ORBox" + sessionDate.ToString("yyyyMMdd");
+                Draw.Rectangle(this, tag, false, 5, openingHigh, 0, openingLow, Brushes.LightBlue, Brushes.Blue, 20);
+            }
         }
-    }
-	
-	if (Position.MarketPosition == MarketPosition.Long)
-{
-    if (currentTP - trailingStopPrice < 2 * initialRisk)
-    {
-        currentTP += initialRisk;
-        SetProfitTarget("ORB_Long" + timestamp, CalculationMode.Price, currentTP);
 
-        Draw.Line(this, "ExtendedTP_Long_" + CurrentBar, false, 0, currentTP, 5, currentTP,
-            Brushes.Gold, DashStyleHelper.Dash, 2);
+        private void DrawFVGZones(bool bullishFVG, bool bearishFVG)
+        {
+            string time = Time[0].ToString("yyyyMMddHHmmss");
 
-        Print($"[TP Extended - Long] New TP = {currentTP}, trailingStop = {trailingStopPrice}");
-    }
-}else if (Position.MarketPosition == MarketPosition.Short)
-{
-    if (trailingStopPrice - currentTP < 2 * initialRisk)
-    {
-        currentTP -= initialRisk;
-        SetProfitTarget("ORB_Short" + timestamp, CalculationMode.Price, currentTP);
+            if (bullishFVG)
+            {
+                Draw.Rectangle(this, "BullFVG_" + time, false,
+                    2, Low[0], 0, High[2],
+                    Brushes.LightGreen, Brushes.Green, 20);
+            }
 
-        Draw.Line(this, "ExtendedTP_Short_" + CurrentBar, false, 0, currentTP, 5, currentTP,
-            Brushes.Gold, DashStyleHelper.Dash, 2);
+            if (bearishFVG)
+            {
+                Draw.Rectangle(this, "BearFVG_" + time, false,
+                    2, High[0], 0, Low[2],
+                    Brushes.Pink, Brushes.Red, 20);
+            }
+        }
 
-        Print($"[TP Extended - Short] New TP = {currentTP}, trailingStop = {trailingStopPrice}");
-    }
-}
+        private double CalculateDollarRisk(double stopDistancePoints)
+        {
+            double tickValue = Instrument.MasterInstrument.TickSize * Instrument.MasterInstrument.PointValue;
+            double stopDistanceTicks = stopDistancePoints / TickSize;
+            return stopDistanceTicks * tickValue;
+        }
 
+        private double GetMaxAllowedRisk()
+        {
+            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            return RiskPercent * accountBalance;
+        }
 
-}
+        private void PlaceLongTrade(string timestamp, double reward)
+        {
+            entryPrice = Close[0];
+            initialRisk = Math.Abs(entryPrice - Open[2]);
+            currentTP = entryPrice + 2 * initialRisk;
 
+            EnterLong("ORB_Long" + timestamp);
+            SetStopLoss("ORB_Long" + timestamp, CalculationMode.Price, Open[2], false);
+            SetProfitTarget("ORB_Long" + timestamp, CalculationMode.Price, currentTP);
 
+            trailingStopPrice = openingClose;
+            tradePlaced = true;
+            entryBar = CurrentBar;
 
-			
-			
+            Draw.ArrowUp(this, "LongEntry" + CurrentBar, false, 0, Low[0] - 2 * TickSize, Brushes.Green);
+            Draw.Line(this, "Entry_Line" + timestamp, false, 0, Close[0], 5, Close[0], Brushes.Blue, DashStyleHelper.Dash, 2);
+            Draw.Line(this, "SL_Long_Line" + timestamp, false, 0, Open[2], 5, Open[2], Brushes.Red, DashStyleHelper.Dash, 2);
+            Draw.Line(this, "TP_Long_Line" + timestamp, false, 0, Close[0] + reward, 5, currentTP, Brushes.LimeGreen, DashStyleHelper.Dash, 2);
+        }
+
+        private void PlaceShortTrade(string timestamp, double reward)
+        {
+            entryPrice = Close[0];
+            initialRisk = Math.Abs(entryPrice - Open[2]);
+            currentTP = entryPrice - 2 * initialRisk;
+
+            EnterShort("ORB_Short" + timestamp);
+            SetStopLoss("ORB_Short" + timestamp, CalculationMode.Price, Open[2], false);
+            SetProfitTarget("ORB_Short" + timestamp, CalculationMode.Price, currentTP);
+
+            trailingStopPrice = openingClose;
+            tradePlaced = true;
+            entryBar = CurrentBar;
+
+            Draw.ArrowDown(this, "ShortEntry" + CurrentBar, false, 0, High[0] + 2 * TickSize, Brushes.Red);
+            Draw.Line(this, "Entry_Line" + timestamp, false, 0, Close[0], 5, Close[0], Brushes.Blue, DashStyleHelper.Dash, 2);
+            Draw.Line(this, "SL_Short_Line" + timestamp, false, 0, Open[2], 5, Open[2], Brushes.Green, DashStyleHelper.Dash, 2);
+            Draw.Line(this, "TP_Short_Line" + timestamp, false, 0, Close[0] - reward, 5, currentTP, Brushes.Orange, DashStyleHelper.Dash, 2);
+        }
+
+        private void ManageTrailingStop(string timestamp)
+        {
+            if (Position.MarketPosition == MarketPosition.Long)
+            {
+                double swingLow = GetSwingLow(swingStrength);
+                if (!double.IsNaN(swingLow) && swingLow > trailingStopPrice)
+                {
+                    trailingStopPrice = swingLow;
+                    ExitLongStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", "ORB_Long" + timestamp);
+                    Draw.Line(this, "TS_Long_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice, Brushes.DarkRed, DashStyleHelper.Dash, 2);
+                }
+            }
+            else if (Position.MarketPosition == MarketPosition.Short)
+            {
+                double swingHigh = GetSwingHigh(swingStrength);
+                if (!double.IsNaN(swingHigh) && swingHigh < trailingStopPrice)
+                {
+                    trailingStopPrice = swingHigh;
+                    ExitShortStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", "ORB_Short" + timestamp);
+                    Draw.Line(this, "TS_Short_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice, Brushes.DarkGreen, DashStyleHelper.Dash, 2);
+                }
+            }
+        }
+
+        private void ExtendProfitTargetIfNeeded(string timestamp)
+        {
+            if (Position.MarketPosition == MarketPosition.Long)
+            {
+                if (currentTP - trailingStopPrice < 2 * initialRisk)
+                {
+                    currentTP += initialRisk;
+                    SetProfitTarget("ORB_Long" + timestamp, CalculationMode.Price, currentTP);
+                    Draw.Line(this, "ExtendedTP_Long_" + CurrentBar, false, 0, currentTP, 5, currentTP, Brushes.Gold, DashStyleHelper.Dash, 2);
+                    Print($"[TP Extended - Long] New TP = {currentTP}, trailingStop = {trailingStopPrice}");
+                }
+            }
+            else if (Position.MarketPosition == MarketPosition.Short)
+            {
+                if (trailingStopPrice - currentTP < 2 * initialRisk)
+                {
+                    currentTP -= initialRisk;
+                    SetProfitTarget("ORB_Short" + timestamp, CalculationMode.Price, currentTP);
+                    Draw.Line(this, "ExtendedTP_Short_" + CurrentBar, false, 0, currentTP, 5, currentTP, Brushes.Gold, DashStyleHelper.Dash, 2);
+                    Print($"[TP Extended - Short] New TP = {currentTP}, trailingStop = {trailingStopPrice}");
+                }
+            }
         }
 
         protected override void OnExecutionUpdate(Execution execution, string executionId, double price,
