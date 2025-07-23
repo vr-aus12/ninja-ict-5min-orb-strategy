@@ -38,11 +38,35 @@ namespace NinjaTrader.NinjaScript.Strategies
             get { return riskPercent; }
             set { riskPercent = value; }
         }
+		[NinjaScriptProperty]
+[Display(Name = "Opening Range Start (HH:mm)", GroupName = "Opening Range", Order = 2)]
+public string OpeningRangeStartTime { get; set; } = "23:30";
+
+[NinjaScriptProperty]
+[Display(Name = "Opening Range End (HH:mm)", GroupName = "Opening Range", Order = 3)]
+public string OpeningRangeEndTime { get; set; } = "23:35";
+
+[NinjaScriptProperty]
+[Range(1, 10)]
+[Display(Name = "Swing Strength", GroupName = "Trade Settings", Order = 4)]
+public int SwingStrength { get; set; } = 3;
+
+[NinjaScriptProperty]
+[Range(1.0, 10.0)]
+[Display(Name = "Reward:Risk Ratio", GroupName = "Trade Settings", Order = 5)]
+public double RewardRiskRatio { get; set; } = 2.0;
+
+[NinjaScriptProperty]
+[Range(1.0, 10.0)]
+[Display(Name = "TP Adjust Threshold (x Risk)", GroupName = "Trade Settings", Order = 6)]
+public double TPAdjustThreshold { get; set; } = 3.0;
 
 
 
-        private readonly TimeSpan ORStartLocal = new TimeSpan(23, 30, 0);
-        private readonly TimeSpan OREndLocal = new TimeSpan(23, 35, 0);
+
+private TimeSpan ORStartLocal => TimeSpan.Parse(OpeningRangeStartTime);
+private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
+
 
         protected override void OnStateChange()
         {
@@ -121,7 +145,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     return;
                 }
 
-                double reward = 2 * stopDistancePoints;
+                double reward = RewardRiskRatio * stopDistancePoints;
 
                 if (Close[0] > openingHigh && bullishFVG)
                     PlaceLongTrade(timestamp, reward);
@@ -202,7 +226,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             Draw.ArrowUp(this, "LongEntry" + CurrentBar, false, 0, Low[0] - 2 * TickSize, Brushes.Green);
             Draw.Line(this, "Entry_Line" + timestamp, false, 0, Close[0], 5, Close[0], Brushes.Blue, DashStyleHelper.Dash, 2);
             Draw.Line(this, "SL_Long_Line" + timestamp, false, 0, Open[2], 5, Open[2], Brushes.Red, DashStyleHelper.Dash, 2);
-            Draw.Line(this, "TP_Long_Line" + timestamp, false, 0, Close[0] + reward, 5, currentTP, Brushes.LimeGreen, DashStyleHelper.Dash, 2);
+            Draw.Line(this, "TP_Long_Line" + timestamp, false, 0, currentTP, 5, currentTP, Brushes.LimeGreen, DashStyleHelper.Dash, 2);
         }
 
         private void PlaceShortTrade(string timestamp, double reward)
@@ -222,14 +246,14 @@ namespace NinjaTrader.NinjaScript.Strategies
             Draw.ArrowDown(this, "ShortEntry" + CurrentBar, false, 0, High[0] + 2 * TickSize, Brushes.Red);
             Draw.Line(this, "Entry_Line" + timestamp, false, 0, Close[0], 5, Close[0], Brushes.Blue, DashStyleHelper.Dash, 2);
             Draw.Line(this, "SL_Short_Line" + timestamp, false, 0, Open[2], 5, Open[2], Brushes.Green, DashStyleHelper.Dash, 2);
-            Draw.Line(this, "TP_Short_Line" + timestamp, false, 0, Close[0] - reward, 5, currentTP, Brushes.Orange, DashStyleHelper.Dash, 2);
+            Draw.Line(this, "TP_Short_Line" + timestamp, false, 0, currentTP, 5, currentTP, Brushes.Orange, DashStyleHelper.Dash, 2);
         }
 
         private void ManageTrailingStop(string timestamp)
         {
             if (Position.MarketPosition == MarketPosition.Long)
             {
-                double swingLow = GetSwingLow(swingStrength);
+                double swingLow = GetSwingLow(SwingStrength);
                 if (!double.IsNaN(swingLow) && swingLow > trailingStopPrice)
                 {
                     trailingStopPrice = swingLow;
@@ -239,7 +263,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             else if (Position.MarketPosition == MarketPosition.Short)
             {
-                double swingHigh = GetSwingHigh(swingStrength);
+                double swingHigh = GetSwingHigh(SwingStrength);
                 if (!double.IsNaN(swingHigh) && swingHigh < trailingStopPrice)
                 {
                     trailingStopPrice = swingHigh;
@@ -253,7 +277,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             if (Position.MarketPosition == MarketPosition.Long)
             {
-                if (currentTP - trailingStopPrice < 2 * initialRisk)
+                if (currentTP - trailingStopPrice < TPAdjustThreshold  * initialRisk)
                 {
                     currentTP += initialRisk;
                     SetProfitTarget("ORB_Long" + timestamp, CalculationMode.Price, currentTP);
@@ -263,7 +287,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             else if (Position.MarketPosition == MarketPosition.Short)
             {
-                if (trailingStopPrice - currentTP < 2 * initialRisk)
+                if (trailingStopPrice - currentTP < TPAdjustThreshold  * initialRisk)
                 {
                     currentTP -= initialRisk;
                     SetProfitTarget("ORB_Short" + timestamp, CalculationMode.Price, currentTP);
