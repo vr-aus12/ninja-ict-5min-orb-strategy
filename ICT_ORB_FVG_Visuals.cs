@@ -26,10 +26,30 @@ namespace NinjaTrader.NinjaScript.Strategies
 		private double initialRisk;
 		private double currentTP;
 		private string activeOrderTag = string.Empty;
+		
+		
 
         #region Variables
         private double riskPercent = 1; // default to 1%
         #endregion
+public enum TimeFrameOption
+{
+    OneMinute = 1,
+    FiveMinutes = 5,
+    FifteenMinutes = 15,
+    ThirtyMinutes = 30,
+    OneHour = 60,
+    FourHour = 240,
+    Daily = 1440
+}
+
+[NinjaScriptProperty]
+[Display(Name = "Primary Time Frame", GroupName = "Time Frames", Order = 0)]
+public TimeFrameOption PrimaryTimeFrame { get; set; } = TimeFrameOption.OneMinute;
+
+[NinjaScriptProperty]
+[Display(Name = "Secondary Time Frame", GroupName = "Time Frames", Order = 1)]
+public TimeFrameOption SecondaryTimeFrame { get; set; } = TimeFrameOption.FiveMinutes;
 
         [NinjaScriptProperty]
         [Range(0.1, 100)]
@@ -63,29 +83,39 @@ public double RewardRiskRatio { get; set; } = 2.0;
 public double TPAdjustThreshold { get; set; } = 3.0;
 
 
-
+[NinjaScriptProperty]
+[Range(0.0, double.MaxValue)]
+[Display(Name = "Minimum FVG Displacement (points)", GroupName = "FVG Settings", Order = 20)]
+public double MinFVGDisplacement { get; set; } = 2.0;  // example: 2 points
 
 private TimeSpan ORStartLocal => TimeSpan.Parse(OpeningRangeStartTime);
 private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
 
 
-        protected override void OnStateChange()
+protected override void OnStateChange()
+{
+    if (State == State.SetDefaults)
+    {
+        Name = "ICT_ORB_FVG_Visuals";
+        Calculate = Calculate.OnBarClose;
+        EntriesPerDirection = 1;
+        EntryHandling = EntryHandling.AllEntries;
+        IsExitOnSessionCloseStrategy = true;
+        ExitOnSessionCloseSeconds = 60;
+        IncludeCommission = true;
+
+        BarsPeriod = new BarsPeriod
         {
-            if (State == State.SetDefaults)
-            {
-                Name = "ICT_ORB_FVG_Visuals";
-                Calculate = Calculate.OnBarClose;
-                EntriesPerDirection = 1;
-                EntryHandling = EntryHandling.AllEntries;
-                IsExitOnSessionCloseStrategy = true;
-                ExitOnSessionCloseSeconds = 60;
-                IncludeCommission = true;
-            }
-            else if (State == State.Configure)
-            {
-                AddDataSeries(BarsPeriodType.Minute, 5);
-            }
-        }
+            BarsPeriodType = BarsPeriodType.Minute,
+            Value = (int)PrimaryTimeFrame
+        };
+    }
+    else if (State == State.Configure)
+    {
+        AddDataSeries(BarsPeriodType.Minute, (int)SecondaryTimeFrame);
+    }
+}
+
 
 		private DateTime ConvertToNewYorkTime(DateTime localTime)
 		{
@@ -98,7 +128,7 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
 
         protected override void OnBarUpdate()
         {
-            if (CurrentBars[0] < 5 || CurrentBars[1] < 1)
+            if (CurrentBars[0] < 15 || CurrentBars[1] < 1)
                 return;
 
             DateTime currentBarTime = Times[0][0];
@@ -132,6 +162,19 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 bool bearishFVG = Low[2] > High[0] && Close[2] < Open[2];
 
                 DrawFVGZones(bullishFVG, bearishFVG);
+				
+				// Apply displacement filters
+if (bullishFVG)
+{
+    double displacement = Low[0] - High[2];
+    bullishFVG = displacement >= MinFVGDisplacement;
+}
+
+if (bearishFVG)
+{
+    double displacement = Low[2] - High[0];
+    bearishFVG = displacement >= MinFVGDisplacement;
+}
 
                 double stopDistancePoints = Math.Abs(Close[0] - Open[3]);
                 if (stopDistancePoints < TickSize)
@@ -139,6 +182,8 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
 
                 double dollarRisk = CalculateDollarRisk(stopDistancePoints);
                 double maxRisk = GetMaxAllowedRisk();
+				
+				 Print($"[RISK ] Risk ${dollarRisk:F2} > Max Allowed ${maxRisk:F2}");
 
                 if (dollarRisk > maxRisk)
                 {
@@ -165,6 +210,7 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
         {
             DateTime barTime5Min = Times[1][0];
             TimeSpan barLocalTime5Min = barTime5Min.TimeOfDay;
+			
 
             if (barLocalTime5Min == OREndLocal)
             {
@@ -172,9 +218,11 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 openingLow = Lows[1][0];
                 openingClose = Closes[1][0];
                 openingCaptured = true;
+				
+				Print($"barTime5Min {barTime5Min} Highs[1][0] {Highs[1][0]} Lows[1][0] {Lows[1][0]} Closes[1][0] {Closes[1][0]} Opens[1][0] {Opens[1][0]}");
 
                 string tag = "ORBox" + sessionDate.ToString("yyyyMMdd");
-                Draw.Rectangle(this, tag, false, 5, openingHigh, 0, openingLow, Brushes.LightBlue, Brushes.Blue, 20);
+                Draw.Rectangle(this, tag, false, 15, openingHigh, 0, openingLow, Brushes.LightBlue, Brushes.Blue, 20);
             }
         }
 
@@ -207,14 +255,14 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
         private double GetMaxAllowedRisk()
         {
             double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
-            return RiskPercent * accountBalance;
+            return RiskPercent * accountBalance/100;
         }
 
         private void PlaceLongTrade(string timestamp, double reward)
         {
             entryPrice = Close[0];
             initialRisk = Math.Abs(entryPrice - Open[2]);
-            currentTP = entryPrice + 2 * initialRisk;
+            currentTP = entryPrice + reward * initialRisk;
 			
 			activeOrderTag = "ORB_Long" + timestamp;
 
@@ -236,7 +284,7 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
         {
             entryPrice = Close[0];
             initialRisk = Math.Abs(entryPrice - Open[2]);
-            currentTP = entryPrice - 2 * initialRisk;
+            currentTP = entryPrice - reward * initialRisk;
 			activeOrderTag = "ORB_Short" + timestamp;
 
             EnterShort(activeOrderTag);
@@ -261,7 +309,7 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 if (!double.IsNaN(swingLow) && swingLow > trailingStopPrice)
                 {
                     trailingStopPrice = swingLow;
-                    //ExitLongStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", activeOrderTag);
+                    
 					SetStopLoss(activeOrderTag, CalculationMode.Price, trailingStopPrice, false);
                     Draw.Line(this, "TS_Long_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice, Brushes.DarkRed, DashStyleHelper.Dash, 2);
                 }
@@ -272,7 +320,7 @@ private TimeSpan OREndLocal => TimeSpan.Parse(OpeningRangeEndTime);
                 if (!double.IsNaN(swingHigh) && swingHigh < trailingStopPrice)
                 {
                     trailingStopPrice = swingHigh;
-                    //ExitShortStopMarket(0, false, 0, trailingStopPrice, "TrailingStop", activeOrderTag);
+                   
 					SetStopLoss(activeOrderTag, CalculationMode.Price, trailingStopPrice, false);
                     Draw.Line(this, "TS_Short_Line" + timestamp, false, 0, trailingStopPrice, 5, trailingStopPrice, Brushes.DarkGreen, DashStyleHelper.Dash, 2);
                 }
